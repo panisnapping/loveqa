@@ -1,4 +1,4 @@
-<title>Printปุ๊บ รู้ปั๊บ</title>
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light}body{margin:0;font:14px system-ui}img{max-width:100%}[hidden]{display:none!important}</style></head><body><title>Printปุ๊บ รู้ปั๊บ</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="ต้นแบบเว็บแอปสั่งพิมพ์และติดตามคิวงานของร้านถ่ายเอกสาร">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -569,6 +569,22 @@ details.card[open] > summary { margin-bottom: 12px; }
   .hello .btn { width: 100%; }
 }
 
+/* ---------- file preview (staff review / job detail) ---------- */
+.fopen { margin-top: 8px; }
+.fnone { display: block; margin-top: 6px; }
+.fpv { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.fpv[hidden] { display: none; }
+.fpv-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fpv-t { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 2px; }
+.fpv-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.fpv-msg { display: flex; align-items: center; gap: 8px; font-size: .92rem; border-radius: 10px; padding: 8px 12px; }
+.fpv-msg.ok { background: var(--green-soft); }
+.fpv-msg.warn { background: var(--orange-soft); }
+.fpv-pages { display: flex; flex-direction: column; gap: 14px; max-height: 62vh; overflow: auto; padding: 2px; }
+.fpv-pages figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.fpv-pages img { width: 100%; max-width: 760px; height: auto; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow); }
+.fpv-pages figcaption { font-size: .8rem; color: var(--muted); }
+
 </style>
 <div id="top"></div>
 <main class="wrap" id="main"></main>
@@ -892,7 +908,7 @@ details.card[open] > summary { margin-bottom: 12px; }
   const MIN = 60000, HOUR = 3600000, DAY = 86400000;
   const COLS = ['users', 'rates', 'orders', 'payments', 'notifications', 'audit'];
   const S = { users: {}, rates: {}, orders: {}, payments: {}, notifications: {}, audit: {}, settings: null };
-  const UI = { view: 'boot', orderId: null, dataTab: 'rates', modal: null, draft: null, me: null, ready: false, loginTab: 'login', menu: false, loadNote: '', orderFilter: 'active', busy: null, formShown: null, pop: null, notifFresh: null, boardTab: 'new', search: '' };
+  const UI = { view: 'boot', orderId: null, dataTab: 'rates', modal: null, draft: null, me: null, ready: false, loginTab: 'login', menu: false, loadNote: '', orderFilter: 'active', busy: null, formShown: null, pop: null, notifFresh: null, boardTab: 'new', search: '', fpv: null };
   const LS_DATA = 'printpub.data.v1', LS_SESSION = 'printpub.session.v1';
   const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked */ } };
@@ -1148,6 +1164,7 @@ details.card[open] > summary { margin-bottom: 12px; }
   function cleanItem(it) {
     const c = { fileName: String(it.fileName || '').slice(0, 160), fileSize: +it.fileSize || 0, pages: parseInt(it.pages, 10) || 0, paper: it.paper, color: it.color, sides: it.sides, copies: parseInt(it.copies, 10) || 0, bindingId: it.bindingId || 'none' };
     const b = PP.bindingRate(S.rates, c.bindingId); if (b) c.bindingName = b.name;
+    if (it.fileRef && it.fileRef.id) c.fileRef = { kind: 'local', id: String(it.fileRef.id).slice(0, 64), type: String(it.fileRef.type || '').slice(0, 100) };
     c.price = PP.itemPrice(c, S.rates).total;
     return c;
   }
@@ -1329,6 +1346,7 @@ details.card[open] > summary { margin-bottom: 12px; }
   // ---------------------------------------------------------------- demo data
   async function resetDemo(replace) {
     const data = await window.makeSeed(now(), sha256hex);
+    FileStore.clear();
     if (Store.mode !== 'shared') { applyLocal(data); afterSeed(); return; }
     const entries = [['settings', 'settings', data.settings]];
     COLS.forEach(c => Object.values(data[c] || {}).forEach(d => entries.push([c, d.id, d])));
@@ -1362,14 +1380,15 @@ details.card[open] > summary { margin-bottom: 12px; }
   let pdfReady = null;
   function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
   function loadPdfJs() {
-    if (!pdfReady) pdfReady = (async () => { await loadScript(PDFJS_WORKER); await loadScript(PDFJS); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; })();
+    if (!pdfReady) pdfReady = (async () => { await loadScript(PDFJS_WORKER); await loadScript(PDFJS); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; })()
+      .catch(e => { pdfReady = null; throw e; }); // a failed CDN load can be retried on the next file
     return pdfReady;
   }
   async function countPdfPages(file) {
     try {
       await loadPdfJs();
-      const doc = await window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-      const n = doc.numPages; doc.destroy(); return n;
+      const task = window.pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+      const n = (await task.promise).numPages; task.destroy(); return n;
     } catch (e) {
       try {
         const txt = new TextDecoder('latin1').decode(await file.arrayBuffer());
@@ -1378,6 +1397,60 @@ details.card[open] > summary { margin-bottom: 12px; }
       } catch (e2) { return null; }
     }
   }
+  // Draws the first pages of a PDF into `box` (one <figure> per page). Returns the page counts.
+  async function renderPdfPages(blob, box, maxPages) {
+    await loadPdfJs();
+    const task = window.pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) });
+    const doc = await task.promise;
+    const n = doc.numPages, show = Math.min(n, maxPages || 12);
+    const w = Math.max(320, Math.min(900, box.clientWidth || 640));
+    for (let i = 1; i <= show; i++) {
+      const page = await doc.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(2.5, (w * (window.devicePixelRatio || 1)) / base.width) });
+      const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      const fig = document.createElement('figure'); fig.appendChild(c);
+      const cap = document.createElement('figcaption'); cap.textContent = `หน้า ${i} จาก ${n}`; fig.appendChild(cap);
+      box.appendChild(fig);
+    }
+    task.destroy();
+    return { pages: n, shown: show };
+  }
+
+  // ---------------------------------------------------------------- print files
+  // The prototype has no file server, so the customer's file is kept in this browser (IndexedDB):
+  // staff can open it when they use the same computer. A real deployment keeps it in cloud storage.
+  const FileStore = (() => {
+    let dbP = null; const urls = new Map();
+    function open() {
+      if (!dbP) dbP = new Promise((res, rej) => {
+        try {
+          const rq = window.indexedDB.open('printpub-files', 1);
+          rq.onupgradeneeded = () => rq.result.createObjectStore('files');
+          rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+        } catch (e) { rej(e); }
+      });
+      return dbP;
+    }
+    async function run(mode, fn) {
+      const d = await open();
+      return new Promise((res, rej) => {
+        const t = d.transaction('files', mode); const rq = fn(t.objectStore('files'));
+        t.oncomplete = () => res(rq ? rq.result : undefined); t.onerror = t.onabort = () => rej(t.error);
+      });
+    }
+    return {
+      async save(file) { try { const id = uid('f'); await run('readwrite', st => st.put(file, id)); return { kind: 'local', id, type: file.type || '' }; } catch (e) { return null; } },
+      async get(ref) { if (!ref || !ref.id) return null; try { return (await run('readonly', st => st.get(ref.id))) || null; } catch (e) { return null; } },
+      async url(ref) {
+        if (ref && urls.has(ref.id)) return urls.get(ref.id);
+        const b = await this.get(ref); if (!b) return null;
+        const u = URL.createObjectURL(b); urls.set(ref.id, u); return u;
+      },
+      async clear() { try { await run('readwrite', st => st.clear()); } catch (e) { /* nothing stored */ } },
+    };
+  })();
 
 
   // ================================================================ presentation tier (screens)
@@ -1684,16 +1757,63 @@ details.card[open] > summary { margin-bottom: 12px; }
       return `<li class="${state}"><span class="dot">${i < cur ? icon('check', 14) : ''}</span><span class="pl"><b>${label}</b>${t ? `<span>${t}</span>` : ''}</span></li>`;
     }).join('')}</ol></section>`;
   }
-  function itemsTable(o) {
+  // withFiles: staff views show an "open file" button per item and a preview box under the table
+  function itemsTable(o, withFiles) {
+    const openBtn = (it, i) => it.fileRef
+      ? `<button type="button" class="btn sm fopen" data-act="file-preview" data-id="${o.id}:${i}">${icon('eye', 16)} เปิดดูไฟล์</button>`
+      : '<span class="small muted fnone">ไม่มีไฟล์แนบในระบบ</span>';
     return `<div class="tbl-wrap"><table class="items"><thead><tr><th>ไฟล์และรูปแบบการพิมพ์</th><th class="r">หน้า</th><th class="r">ราคา</th></tr></thead><tbody>
-      ${o.items.map(it => `<tr><td><div class="fname">${esc(it.fileName)}</div><div class="spec">${esc(specText(it))}</div></td><td class="r num">${(+it.pages).toLocaleString()}</td><td class="r num">${money(it.price != null ? it.price : PP.itemPrice(it, S.rates).total)}</td></tr>`).join('')}
-    </tbody></table></div>`;
+      ${o.items.map((it, i) => `<tr><td><div class="fname">${esc(it.fileName)}</div><div class="spec">${esc(specText(it))}</div>${withFiles ? openBtn(it, i) : ''}</td><td class="r num">${(+it.pages).toLocaleString()}</td><td class="r num">${money(it.price != null ? it.price : PP.itemPrice(it, S.rates).total)}</td></tr>`).join('')}
+    </tbody></table></div>${withFiles ? `<div class="fpv" id="fpv-${o.id}" hidden></div>` : ''}`;
   }
-  function detailCard(o) {
+  // ----- file preview (staff): PDF pages drawn with pdf.js, images shown as they are
+  const fpvCache = new Map(); // fileRef id -> finished preview html
+  function fpvHead(o, it, url, status) {
+    return `<div class="fpv-h"><span class="f-ic ${fileKind(it.fileName)}" aria-hidden="true">${esc(fileExt(it.fileName))}</span>
+      <span class="fpv-t"><b class="fname">${esc(it.fileName)}</b>${status ? `<span class="small muted">${status}</span>` : ''}</span>
+      ${url ? `<span class="fpv-acts"><a class="btn sm" href="${url}" target="_blank" rel="noopener">เปิดในแท็บใหม่</a><a class="btn sm" href="${url}" download="${esc(it.fileName)}">ดาวน์โหลด</a></span>` : ''}
+      <button type="button" class="iconbtn" data-act="file-close" data-id="${o.id}" aria-label="ปิดตัวอย่างไฟล์">${icon('x')}</button></div>`;
+  }
+  async function filePreview(o, idx) {
+    const it = o.items[idx]; const ref = it && it.fileRef; if (!ref) return;
+    const live = () => { const b = document.getElementById('fpv-' + o.id); return b && UI.fpv && UI.fpv.oid === o.id && UI.fpv.idx === idx ? b : null; };
+    let box = live(); if (!box) return;
+    box.hidden = false; box.dataset.idx = String(idx);
+    if (fpvCache.has(ref.id)) { box.innerHTML = fpvCache.get(ref.id); return; }
+    box.innerHTML = fpvHead(o, it, null, 'กำลังเปิดไฟล์…');
+    const blob = await FileStore.get(ref);
+    if (!blob) {
+      box = live(); if (box) box.innerHTML = fpvHead(o, it, null) + `<div class="note warn">${icon('alert')}<span>ไม่พบไฟล์นี้ในเครื่องนี้ ไฟล์จะเปิดได้เฉพาะในเบราว์เซอร์เดียวกับที่ลูกค้าใช้อัปโหลด</span></div>`;
+      return;
+    }
+    const url = await FileStore.url(ref);
+    const pages = document.createElement('div'); pages.className = 'fpv-pages';
+    let info = '';
+    const kind = /^image\//.test(blob.type) ? 'img' : blob.type === 'application/pdf' ? 'pdf' : fileKind(it.fileName);
+    if (kind === 'img') pages.innerHTML = `<figure><img src="${url}" alt="${esc(it.fileName)}"></figure>`;
+    else if (kind === 'pdf') {
+      box = live(); if (box) box.innerHTML = fpvHead(o, it, url, 'กำลังแสดงหน้าไฟล์…');
+      try {
+        const r = await renderPdfPages(blob, pages, 12);
+        info = r.pages === +it.pages
+          ? `<p class="fpv-msg ok">${icon('check', 16)} ไฟล์มี ${r.pages} หน้า ตรงกับที่ลูกค้ากรอก</p>`
+          : `<p class="fpv-msg warn">${icon('alert', 16)} ไฟล์มี ${r.pages} หน้า แต่ลูกค้ากรอก ${(+it.pages).toLocaleString()} หน้า</p>`;
+        if (r.shown < r.pages) info += `<p class="small muted">แสดง ${r.shown} หน้าแรก กด “เปิดในแท็บใหม่” เพื่อดูทั้งไฟล์</p>`;
+        pages.querySelectorAll('canvas').forEach(c => { const img = document.createElement('img'); img.src = c.toDataURL('image/jpeg', 0.85); img.alt = c.nextSibling ? c.nextSibling.textContent : ''; c.replaceWith(img); });
+      } catch (e) {
+        console.warn('file preview failed', e && e.message ? e.message : e);
+        pages.innerHTML = '<p class="small muted">แสดงตัวอย่างในหน้านี้ไม่ได้ กด “เปิดในแท็บใหม่” หรือ “ดาวน์โหลด” เพื่อเปิดไฟล์</p>';
+      }
+    } else pages.innerHTML = '<p class="small muted">เว็บแสดงตัวอย่างไฟล์ชนิดนี้ไม่ได้ กด “ดาวน์โหลด” แล้วเปิดด้วยโปรแกรมในเครื่อง</p>';
+    const html = fpvHead(o, it, url) + info + pages.outerHTML;
+    fpvCache.set(ref.id, html);
+    box = live(); if (box) box.innerHTML = html;
+  }
+  function detailCard(o, staff) {
     const urgent = o.urgent ? (PP.urgentRate(S.rates) || { price: 0 }) : null;
     const sheets = o.items.reduce((a, it) => a + PP.sheetsOf(it), 0);
     return `<section class="card stack"><div class="spread"><h2 class="sec-h">รายละเอียดงาน</h2><span class="small muted">ส่งเมื่อ ${fmtDT(o.submittedAt)}</span></div>
-      ${itemsTable(o)}
+      ${itemsTable(o, staff)}
       <div class="totals">
         <span class="muted">ราคาประเมินจากระบบ${urgent ? ` (รวมงานด่วน ${money(urgent.price)})` : ''}</span><span class="num">${money(o.estPrice)}</span>
         ${o.quotedPrice != null ? `<span>ราคาที่ร้านยืนยัน</span><span class="num grand">${money(o.quotedPrice)}</span>` : ''}
@@ -1728,6 +1848,7 @@ details.card[open] > summary { margin-bottom: 12px; }
 
   // ----- customer: new order
   const pendingFiles = new Map();
+  const draftFiles = new Map(); // draft item key -> File chosen by the customer, saved on submit
   const fileExt = n => ((String(n).match(/\.([a-z0-9]{1,5})$/i) || [0, 'FILE'])[1]).toUpperCase();
   const fileKind = n => /\.pdf$/i.test(n) ? 'pdf' : /\.(jpe?g|png|gif|webp|heic)$/i.test(n) ? 'img' : 'doc';
   const newItem = () => ({ key: uid('i'), fileName: '', fileSize: 0, pages: '', paper: 'A4', color: 'bw', sides: 'single', copies: 1, bindingId: 'none', pageSource: '', counting: false });
@@ -1736,6 +1857,7 @@ details.card[open] > summary { margin-bottom: 12px; }
   function pageHint(it) { return it.counting ? 'กำลังนับหน้า…' : it.pageSource === 'pdf' ? 'ระบบนับหน้าจากไฟล์ให้แล้ว' : it.pageSource === 'guess' ? 'รูปภาพนับเป็น 1 หน้า' : it.pageSource === 'kept' ? 'ไฟล์เดิม' : 'กรอกจำนวนหน้าของไฟล์'; }
   function applyFile(it, f) {
     it.fileName = f.name; it.fileSize = f.size; it.counting = false;
+    draftFiles.set(it.key, f); delete it.fileRef;
     const k = fileKind(f.name);
     if (/^image\//.test(f.type) || k === 'img') { it.pages = 1; it.pageSource = 'guess'; }
     else if (k === 'pdf' || f.type === 'application/pdf') { it.counting = true; it.pageSource = ''; pendingFiles.set(it.key, f); }
@@ -2117,7 +2239,7 @@ details.card[open] > summary { margin-bottom: 12px; }
           ${stepper(o)}
           <p class="small">${staffInfo(o, q) || esc(custStatus(o, q).title)}</p>
           ${staffActs(o)}
-          ${detailCard(o)}
+          ${detailCard(o, true)}
           <section class="card stack"><h2 class="sec-h">การชำระเงิน</h2>${pays.length ? `<div class="tbl-wrap"><table class="items"><thead><tr><th>เลขธุรกรรม</th><th>สถานะ</th><th class="r">ยอด</th><th class="r">ได้รับ</th><th class="r">Webhook</th></tr></thead><tbody>
             ${pays.map(p => `<tr><td class="mono small">${esc(p.txnId)}</td><td>${esc(PAY_TH[effPayStatus(p)] || p.status)}</td><td class="r num">${money(p.amount)}</td><td class="r num">${p.receivedAmount != null ? money(p.receivedAmount) : '–'}</td><td class="r num">${(p.events || []).length}${p.duplicateCount ? ` (ซ้ำ ${p.duplicateCount})` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="small muted">ยังไม่มีรายการชำระ</p>'}</section>
           ${historyCard(o)}`, true);
@@ -2126,7 +2248,7 @@ details.card[open] > summary { margin-bottom: 12px; }
         if (!o) return sheet('ไม่พบคำสั่งพิมพ์', '');
         return sheet(`ตรวจคำสั่งพิมพ์ ${o.code}`, `
           <div class="spread"><div class="jc-cust">${icon('user', 16)}<b>${esc(userName(o.customerId))}</b><span class="small">· ส่งเมื่อ ${fmtDT(o.submittedAt)}</span></div>${o.urgent ? '<span class="tag urgent">ด่วน</span>' : ''}</div>
-          ${itemsTable(o)}
+          ${itemsTable(o, true)}
           ${o.note ? `<div class="note">${icon('info')}<span><b>ข้อความจากลูกค้า:</b> ${esc(o.note)}</span></div>` : ''}
           <form id="f-quote" class="card stack" data-id="${o.id}" novalidate>
             <h3>ไฟล์ใช้ได้ · ออกใบเสนอราคา</h3>
@@ -2225,9 +2347,10 @@ details.card[open] > summary { margin-bottom: 12px; }
     const sel = UI.modal && UI.modal.type === 'handover' && UI.modal.code ? '.sheet-b button[type=submit]' : '.sheet-b input:not([type=hidden]):not([type=checkbox]), .sheet-b textarea, .sheet-b button';
     const first = box.querySelector(sel);
     if (first && UI.modal && UI.modal.type !== 'detail') first.focus({ preventScroll: true });
+    if (UI.fpv && UI.modal && S.orders[UI.fpv.oid]) filePreview(S.orders[UI.fpv.oid], UI.fpv.idx);
   }
-  function openModal(m) { UI.modal = m; UI.pop = null; UI.notifFresh = null; renderModal(); renderHeaderOnly(); }
-  function closeModal() { UI.modal = null; renderModal(); }
+  function openModal(m) { UI.modal = m; UI.fpv = null; UI.pop = null; UI.notifFresh = null; renderModal(); renderHeaderOnly(); }
+  function closeModal() { UI.modal = null; UI.fpv = null; renderModal(); }
   function openConfirm(o) { openModal(Object.assign({ type: 'confirm' }, o)); }
   function renderBusy() {
     const b = document.getElementById('busy'); if (!b) return;
@@ -2314,7 +2437,16 @@ details.card[open] > summary { margin-bottom: 12px; }
     'toggle-pw': (id, el) => { const inp = document.getElementById(id); if (!inp) return; const show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; el.setAttribute('aria-label', show ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'); inp.focus(); },
     seed: () => resetDemo(false),
     'open-order': id => { const me = meUser(); if (!me || !id) return; UI.pop = null; UI.notifFresh = null; if (me.role === 'customer') go('c-order', { orderId: id }); else openModal({ type: 'detail', id }); },
-    'remove-item': id => { pendingFiles.delete(id); UI.draft.items = UI.draft.items.filter(i => i.key !== id); render(true); },
+    'file-preview': async id => {
+      const [oid, i] = String(id).split(':'); const o = S.orders[oid]; const box = document.getElementById('fpv-' + oid);
+      if (!o || !box) return;
+      if (!box.hidden && box.dataset.idx === i) { box.hidden = true; UI.fpv = null; return; }
+      UI.fpv = { oid, idx: +i };
+      box.hidden = false; box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      await filePreview(o, +i);
+    },
+    'file-close': id => { const box = document.getElementById('fpv-' + id); if (box) box.hidden = true; UI.fpv = null; },
+    'remove-item': id => { pendingFiles.delete(id); draftFiles.delete(id); UI.draft.items = UI.draft.items.filter(i => i.key !== id); render(true); },
     qty: (id, el) => {
       const it = UI.draft && UI.draft.items.find(x => x.key === id); if (!it) return;
       it.copies = Math.min(500, Math.max(1, (parseInt(it.copies, 10) || 0) + parseInt(el.dataset.d, 10)));
@@ -2410,6 +2542,11 @@ details.card[open] > summary { margin-bottom: 12px; }
         else if (!d.items.length) { const z = document.getElementById('dropzone'); if (z) z.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
         toast(v.errs[0], 'error');
         throw new Error(v.errs.join(' · '));
+      }
+      for (const it of d.items) {
+        const file = draftFiles.get(it.key); if (!file) continue;
+        const ref = await FileStore.save(file); if (ref) it.fileRef = ref;
+        draftFiles.delete(it.key);
       }
       const o = d.editingId ? await Svc.resubmit(meUser(), d.editingId, d) : await Svc.createOrder(meUser(), d);
       UI.draft = null;
@@ -2544,3 +2681,4 @@ details.card[open] > summary { margin-bottom: 12px; }
 })();
 
 </script>
+</body></html>
